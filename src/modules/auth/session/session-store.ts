@@ -1,7 +1,8 @@
+import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { Injectable } from '@nestjs/common';
 import { SessionUser } from '../../../common/auth/session-user';
 import { UserRepository } from '../../../infrastructure/db/repositories/user.repository';
+import { AppRedisClient, REDIS_CLIENT } from '../../../infrastructure/redis/redis-client';
 
 export interface UserSession {
   id: string;
@@ -9,37 +10,63 @@ export interface UserSession {
   expiresAt: Date;
 }
 
+interface StoredSession {
+  userId: number;
+  expiresAt: string;
+}
+
 @Injectable()
 export class SessionStore {
   readonly cookieName = process.env.SESSION_COOKIE_NAME ?? 'ai_test_platform_session';
-  private readonly sessions = new Map<string, { userId: number; expiresAt: Date }>();
+  private readonly ttlSeconds = Number(process.env.SESSION_TTL_SECONDS ?? 60 * 60 * 8);
+  private readonly keyPrefix = process.env.SESSION_REDIS_KEY_PREFIX ?? 'ai-test-platform:session:';
 
-  constructor(private readonly userRepository: UserRepository) {}
+  constructor(
+    private readonly userRepository: UserRepository,
+    @Inject(REDIS_CLIENT) private readonly redis: AppRedisClient,
+  ) {}
 
   async create(user: SessionUser): Promise<UserSession> {
     const session: UserSession = {
       id: randomUUID(),
       user,
-      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 8),
+      expiresAt: new Date(Date.now() + this.ttlSeconds * 1000),
     };
-    this.sessions.set(session.id, { userId: Number(user.userId), expiresAt: session.expiresAt });
+
+    const storedSession: StoredSession = {
+      userId: Number(user.userId),
+      expiresAt: session.expiresAt.toISOString(),
+    };
+
+    await this.redis.set(this.sessionKey(session.id), JSON.stringify(storedSession), { EX: this.ttlSeconds });
     return session;
   }
 
   async get(id: string): Promise<UserSession | undefined> {
-    const session = this.sessions.get(id);
-    if (!session || session.expiresAt <= new Date()) {
-      this.sessions.delete(id);
+    const rawSession = await this.redis.get(this.sessionKey(id));
+    if (!rawSession) return undefined;
+
+    const storedSession = this.parseStoredSession(rawSession);
+    if (!storedSession) {
+      await this.delete(id);
       return undefined;
     }
-    const user = await this.userRepository.findById(session.userId);
+
+    const expiresAt = new Date(storedSession.expiresAt);
+    if (Number.isNaN(expiresAt.getTime()) || expiresAt <= new Date()) {
+      await this.delete(id);
+      return undefined;
+    }
+
+    const user = await this.userRepository.findById(storedSession.userId);
     if (!user) {
-      this.sessions.delete(id);
+      await this.delete(id);
       return undefined;
     }
+
     return {
       id,
-      expiresAt: session.expiresAt,
+      expiresAt,
       user: {
         userId: String(user.userId),
         name: user.name,
@@ -52,9 +79,22 @@ export class SessionStore {
   }
 
   async delete(id: string): Promise<void> {
-    this.sessions.delete(id);
+    await this.redis.del(this.sessionKey(id));
+  }
+
+  private sessionKey(id: string): string {
+    return `${this.keyPrefix}${id}`;
+  }
+
+  private parseStoredSession(rawSession: string): StoredSession | undefined {
+    try {
+      const parsed = JSON.parse(rawSession) as Partial<StoredSession>;
+      if (typeof parsed.userId !== 'number' || typeof parsed.expiresAt !== 'string') return undefined;
+      return { userId: parsed.userId, expiresAt: parsed.expiresAt };
+    } catch {
+      return undefined;
+    }
   }
 }
 
-// Production adapter contract: preserve this API when replacing the in-memory map with Redis.
 export type RedisSessionStore = Pick<SessionStore, 'create' | 'get' | 'delete' | 'cookieName'>;

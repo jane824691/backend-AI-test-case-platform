@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Post, Res } from '@nestjs/common';
-import { Response } from 'express';
+import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
+import { Request, Response } from 'express';
 import { CurrentUser } from '../../common/authorization/current-user.decorator';
 import { Public } from '../../common/authorization/public.decorator';
 import { SessionUser } from '../../common/auth/session-user';
@@ -40,9 +40,10 @@ export class AuthController {
   }
 
   @Post('logout')
-  async logout(@Res({ passthrough: true }) response: Response) {
+  async logout(@Req() request: Request, @Res({ passthrough: true }) response: Response) {
+    const sessionId = request.cookies?.[this.sessionStore.cookieName];
+    if (sessionId) await this.sessionStore.delete(sessionId);
     response.clearCookie(this.sessionStore.cookieName);
     return { data: { loggedOut: true } };
   }
 }
-

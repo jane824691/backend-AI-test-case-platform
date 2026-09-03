@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Param } from '@nestjs/common';
 import { SessionUser } from '../../common/auth/session-user';
 import { CurrentUser } from '../../common/authorization/current-user.decorator';
 import { Permission } from '../../common/authorization/permission';
@@ -13,5 +13,11 @@ export class ProjectsController {
   @RequirePermission(Permission.ProjectRead)
   listProjects(@CurrentUser() user: SessionUser) {
     return this.projectsService.list(user);
+  }
+
+  @Get(':projectId/workspace')
+  @RequirePermission(Permission.ProjectRead)
+  getWorkspace(@Param('projectId') projectId: string) {
+    return this.projectsService.getWorkspace(projectId);
   }
 }

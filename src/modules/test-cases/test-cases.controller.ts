@@ -17,6 +17,12 @@ export class TestCasesController {
     return this.testCasesService.list(projectId);
   }
 
+  @Get(':testCaseId')
+  @RequirePermission(Permission.TestCaseRead)
+  getDetail(@Param('projectId') projectId: string, @Param('testCaseId') testCaseId: string) {
+    return this.testCasesService.getDetail(projectId, testCaseId);
+  }
+
   @Patch(':testCaseId')
   @RequirePermission(Permission.TestCaseEdit)
   update(@Param('projectId') projectId: string, @Param('testCaseId') testCaseId: string, @Body() input: UpdateTestCaseDto, @CurrentUser() user: SessionUser) {
@@ -42,3 +48,13 @@ export class TestCasesController {
   }
 }
 
+@Controller('projects/:projectId/sections/:sectionId/test-cases')
+export class SectionTestCasesController {
+  constructor(private readonly testCasesService: TestCasesService) {}
+
+  @Get()
+  @RequirePermission(Permission.TestCaseRead)
+  listBySection(@Param('projectId') projectId: string, @Param('sectionId') sectionId: string) {
+    return this.testCasesService.listBySection(projectId, sectionId);
+  }
+}
