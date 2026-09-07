@@ -1,7 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { SessionUser } from '../../common/auth/session-user';
-import { PassFailResult, TestCaseStatus } from '../../common/domain/test-case';
-import { stubResponse } from '../../common/http/api-response';
+import { PassFailResult } from '../../common/domain/test-case';
 import { TestCaseRepository } from '../../infrastructure/db/repositories/test-case.repository';
 import { toTestCaseDetailResponse, toTestCaseSummaryResponse } from './dto/test-case-response.dto';
 import { UpdateTestCaseDto } from './dto/update-test-case.dto';
@@ -35,19 +34,33 @@ export class TestCasesService {
     return { data: toTestCaseDetailResponse(testCase) };
   }
 
-  update(projectId: string, testCaseId: string, input: UpdateTestCaseDto, user: SessionUser) {
-    return stubResponse({ projectId, testCaseId, patch: input, updatedBy: user.name });
+  async update(projectId: string, testCaseId: string, input: UpdateTestCaseDto, user: SessionUser) {
+    const updated = await this.testCaseRepository.createEditedVersion(
+      Number(projectId),
+      Number(testCaseId),
+      input,
+      Number(user.userId),
+    );
+    return { data: toTestCaseDetailResponse(updated) };
   }
 
-  publish(projectId: string, testCaseId: string, user: SessionUser) {
-    return stubResponse({ projectId, testCaseId, currentStatus: TestCaseStatus.Published, updatedBy: user.name });
+  async publish(projectId: string, testCaseId: string, user: SessionUser) {
+    const updated = await this.testCaseRepository.publish(Number(projectId), Number(testCaseId), Number(user.userId));
+    return { data: toTestCaseDetailResponse(updated) };
   }
 
-  reopen(projectId: string, testCaseId: string, user: SessionUser) {
-    return stubResponse({ projectId, testCaseId, currentStatus: TestCaseStatus.Draft, updatedBy: user.name });
+  async reopen(projectId: string, testCaseId: string, user: SessionUser) {
+    const updated = await this.testCaseRepository.reopen(Number(projectId), Number(testCaseId), Number(user.userId));
+    return { data: toTestCaseDetailResponse(updated) };
   }
 
-  updateResult(projectId: string, testCaseId: string, result: PassFailResult, user: SessionUser) {
-    return stubResponse({ projectId, testCaseId, passFailResult: result, updatedBy: user.name });
+  async updateResult(projectId: string, testCaseId: string, result: PassFailResult, user: SessionUser) {
+    const updated = await this.testCaseRepository.updateResult(
+      Number(projectId),
+      Number(testCaseId),
+      result,
+      Number(user.userId),
+    );
+    return { data: toTestCaseDetailResponse(updated) };
   }
 }

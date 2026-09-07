@@ -7,6 +7,8 @@ export interface TestCaseSummaryResponseDto {
   sectionKey: string | null;
   stableCaseCode: string;
   currentStatus: string;
+  currentTestCaseVersionId: number | null;
+  publishedTestCaseVersionId: number | null;
   updatedByUserId: number | null;
   updatedByUserName: string | null;
   updatedAt: string | null;
@@ -20,11 +22,13 @@ export interface TestCaseSummaryResponseDto {
     priority: string | null;
     suggestedTestLevel: string | null;
   };
+  publishedVersion: {
+    testCaseVersionId: number | null;
+    revisionNumber: number | null;
+  };
 }
 
 export interface TestCaseDetailResponseDto extends TestCaseSummaryResponseDto {
-  currentTestCaseVersionId: number | null;
-  publishedTestCaseVersionId: number | null;
   latestVersion: TestCaseSummaryResponseDto['latestVersion'] & {
     description: string | null;
     preconditions: string | null;
@@ -46,6 +50,8 @@ export function toTestCaseSummaryResponse(testCase: DbTestCaseSummary): TestCase
     sectionKey: testCase.section_key,
     stableCaseCode: testCase.stable_case_code,
     currentStatus: testCase.current_status,
+    currentTestCaseVersionId: testCase.current_test_case_version_id,
+    publishedTestCaseVersionId: testCase.published_test_case_version_id,
     updatedByUserId: testCase.updated_by_user_id,
     updatedByUserName: testCase.updated_by_user_name,
     updatedAt: testCase.updated_at,
@@ -59,6 +65,10 @@ export function toTestCaseSummaryResponse(testCase: DbTestCaseSummary): TestCase
       priority: testCase.latest_version.priority,
       suggestedTestLevel: testCase.latest_version.suggested_test_level,
     },
+    publishedVersion: {
+      testCaseVersionId: testCase.published_version.test_case_version_id,
+      revisionNumber: testCase.published_version.revision_number,
+    },
   };
 }
 
@@ -66,8 +76,6 @@ export function toTestCaseDetailResponse(testCase: DbTestCaseDetail): TestCaseDe
   const summary = toTestCaseSummaryResponse(testCase);
   return {
     ...summary,
-    currentTestCaseVersionId: testCase.current_test_case_version_id,
-    publishedTestCaseVersionId: testCase.published_test_case_version_id,
     latestVersion: {
       ...summary.latestVersion,
       description: testCase.latest_version.description,
