@@ -39,6 +39,10 @@ interface TestCaseDetailRow extends TestCaseSummaryRow {
   version_updated_at: Date | string | null;
 }
 
+interface NextRevisionRow extends RowDataPacket {
+  next_revision_number: number | string;
+}
+
 export interface UpdateTestCaseVersionInput {
   title?: string;
   description?: string;
@@ -170,10 +174,25 @@ export class TestCaseRepository {
       throw new BadRequestException('Test case has no current version to edit.');
     }
 
-    const nextRevisionNumber = (current.latest_version.revision_number ?? 0) + 1;
     const connection = await this.pool.getConnection();
     try {
       await connection.beginTransaction();
+      await connection.execute(
+        `SELECT test_case_id
+         FROM test_cases
+         WHERE project_id = :projectId
+           AND test_case_id = :testCaseId
+         FOR UPDATE`,
+        { projectId, testCaseId },
+      );
+      const [revisionRows] = await connection.execute<NextRevisionRow[]>(
+        `SELECT COALESCE(MAX(revision_number), 0) + 1 AS next_revision_number
+         FROM test_case_versions
+         WHERE test_case_id = :testCaseId`,
+        { testCaseId },
+      );
+      const nextRevisionNumber = toNumber(revisionRows[0].next_revision_number);
+
       const [insertResult] = await connection.execute<ResultSetHeader>(
         `INSERT INTO test_case_versions (
            test_case_id,
