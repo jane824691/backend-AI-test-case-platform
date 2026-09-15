@@ -31,6 +31,7 @@ export interface RequirementVersionSummaryResponseDto {
   requirementVersionId: number;
   versionNumber: number;
   changeSummary: string | null;
+  rawMarkdown: string | null;
   updatedAt: string | null;
 }
 
@@ -78,6 +79,7 @@ export function toProjectSummaryResponse(project: DbProjectSummary): ProjectSumm
           requirementVersionId: project.latest_requirement_version.requirement_version_id,
           versionNumber: project.latest_requirement_version.version_number,
           changeSummary: project.latest_requirement_version.change_summary,
+          rawMarkdown: project.latest_requirement_version.raw_markdown,
           updatedAt: project.latest_requirement_version.updated_at,
         }
       : null,

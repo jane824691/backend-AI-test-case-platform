@@ -7,6 +7,7 @@ import { Permission } from './permission';
 import { REQUIRED_PERMISSION_KEY } from './require-permission.decorator';
 
 const allowedRoles: Record<Permission, Role[]> = {
+  [Permission.ProjectCreate]: [Role.Admin, Role.PM],
   [Permission.ProjectRead]: [Role.Admin, Role.PM, Role.QA, Role.Developer],
   [Permission.RequirementRead]: [Role.Admin, Role.PM, Role.QA, Role.Developer],
   [Permission.RequirementUpload]: [Role.Admin, Role.PM],

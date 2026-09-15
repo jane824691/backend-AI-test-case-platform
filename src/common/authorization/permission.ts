@@ -1,4 +1,5 @@
 export enum Permission {
+  ProjectCreate = 'project:create',
   ProjectRead = 'project:read',
   RequirementRead = 'requirement:read',
   RequirementUpload = 'requirement:upload',
@@ -10,4 +11,3 @@ export enum Permission {
   TestCaseResultUpdate = 'test-case:result:update',
   PermissionManage = 'permission:manage',
 }
-

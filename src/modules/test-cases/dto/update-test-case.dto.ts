@@ -1,6 +1,14 @@
 import { IsBoolean, IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
 
-export enum Priority { P0 = 'p0', P1 = 'p1', P2 = 'p2', P3 = 'p3' }
+export enum Priority {
+  P0 = 'p0',
+  P1 = 'p1',
+  P2 = 'p2',
+  P3 = 'p3',
+  High = 'high',
+  Medium = 'medium',
+  Low = 'low',
+}
 export enum SuggestedTestLevel { Unit = 'unit', Integration = 'integration', E2E = 'e2e' }
 
 export class UpdateTestCaseDto {
@@ -13,4 +21,3 @@ export class UpdateTestCaseDto {
   @IsOptional() @IsString() reusabilityNote?: string;
   @IsOptional() @IsBoolean() unitTestRecommended?: boolean;
 }
-

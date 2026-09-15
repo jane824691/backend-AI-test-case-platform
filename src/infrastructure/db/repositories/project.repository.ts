@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { Pool, RowDataPacket } from 'mysql2/promise';
+import { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { Role, roleCodeToRole } from '../../../common/domain/role';
 import { MYSQL_POOL } from '../mysql-pool';
 import { toIsoString, toNumber } from './row-utils';
@@ -20,6 +20,7 @@ interface ProjectSummaryRow extends RowDataPacket {
   requirement_version_id: number | string | null;
   version_number: number | null;
   change_summary: string | null;
+  raw_markdown: string | null;
   requirement_updated_at: Date | string | null;
   section_count: number | string;
   test_case_count: number | string;
@@ -61,6 +62,7 @@ export interface DbProjectSummary {
     requirement_version_id: number;
     version_number: number;
     change_summary: string | null;
+    raw_markdown: string | null;
     updated_at: string | null;
   } | null;
   section_count: number;
@@ -102,6 +104,44 @@ export class ProjectRepository {
       projectId,
     });
     return rows[0] ? this.toProjectSummary(rows[0]) : undefined;
+  }
+
+  async createProject(name: string, userId: number, roleCode: number): Promise<number> {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [projectResult] = await connection.execute<ResultSetHeader>(
+        `INSERT INTO projects (name, status_code)
+         VALUES (:name, 1)`,
+        { name },
+      );
+      const projectId = projectResult.insertId;
+
+      await connection.execute(
+        `INSERT INTO project_members (project_id, user_id, role_code)
+         VALUES (:projectId, :userId, :roleCode)
+         ON DUPLICATE KEY UPDATE role_code = VALUES(role_code)`,
+        { projectId, userId, roleCode },
+      );
+
+      await connection.commit();
+      return projectId;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async updateProjectName(projectId: number, name: string): Promise<void> {
+    await this.pool.execute(
+      `UPDATE projects
+       SET name = :name,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE project_id = :projectId`,
+      { projectId, name },
+    );
   }
 
   async listLatestVersionSections(projectId: number): Promise<DbRequirementSectionSummary[]> {
@@ -166,6 +206,7 @@ export class ProjectRepository {
                    latest_rv.requirement_version_id,
                    latest_rv.version_number,
                    latest_rv.change_summary,
+                   latest_rv.raw_markdown,
                    latest_rv.updated_at AS requirement_updated_at,
                    COUNT(DISTINCT rs.requirement_section_id) AS section_count,
                    COUNT(DISTINCT tc.test_case_id) AS test_case_count,
@@ -202,6 +243,7 @@ export class ProjectRepository {
                      latest_rv.requirement_version_id,
                      latest_rv.version_number,
                      latest_rv.change_summary,
+                     latest_rv.raw_markdown,
                      latest_rv.updated_at
             ORDER BY p.updated_at DESC, p.project_id DESC`;
   }
@@ -231,6 +273,7 @@ export class ProjectRepository {
             requirement_version_id: toNumber(row.requirement_version_id),
             version_number: row.version_number,
             change_summary: row.change_summary,
+            raw_markdown: row.raw_markdown,
             updated_at: toIsoString(row.requirement_updated_at),
           },
       section_count: toNumber(row.section_count),

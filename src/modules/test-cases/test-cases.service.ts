@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { SessionUser } from '../../common/auth/session-user';
 import { PassFailResult } from '../../common/domain/test-case';
 import { TestCaseRepository } from '../../infrastructure/db/repositories/test-case.repository';
+import { CreateTestCaseDto } from './dto/create-test-case.dto';
 import { toTestCaseDetailResponse, toTestCaseSummaryResponse } from './dto/test-case-response.dto';
 import { UpdateTestCaseDto } from './dto/update-test-case.dto';
 
@@ -32,6 +33,11 @@ export class TestCasesService {
     const testCase = await this.testCaseRepository.findDetail(Number(projectId), Number(testCaseId));
     if (!testCase) throw new NotFoundException(`Test case ${testCaseId} was not found for project ${projectId}.`);
     return { data: toTestCaseDetailResponse(testCase) };
+  }
+
+  async create(projectId: string, input: CreateTestCaseDto, user: SessionUser) {
+    const created = await this.testCaseRepository.createManualDraft(Number(projectId), input, Number(user.userId));
+    return { data: toTestCaseDetailResponse(created) };
   }
 
   async update(projectId: string, testCaseId: string, input: UpdateTestCaseDto, user: SessionUser) {

@@ -3,6 +3,7 @@ import { CurrentUser } from '../../common/authorization/current-user.decorator';
 import { Permission } from '../../common/authorization/permission';
 import { RequirePermission } from '../../common/authorization/require-permission.decorator';
 import { SessionUser } from '../../common/auth/session-user';
+import { CreateTestCaseDto } from './dto/create-test-case.dto';
 import { UpdateTestCaseDto } from './dto/update-test-case.dto';
 import { UpdateTestCaseResultDto } from './dto/update-test-case-result.dto';
 import { TestCasesService } from './test-cases.service';
@@ -15,6 +16,12 @@ export class TestCasesController {
   @RequirePermission(Permission.TestCaseRead)
   list(@Param('projectId') projectId: string) {
     return this.testCasesService.list(projectId);
+  }
+
+  @Post()
+  @RequirePermission(Permission.TestCaseEdit)
+  create(@Param('projectId') projectId: string, @Body() input: CreateTestCaseDto, @CurrentUser() user: SessionUser) {
+    return this.testCasesService.create(projectId, input, user);
   }
 
   @Get(':testCaseId')

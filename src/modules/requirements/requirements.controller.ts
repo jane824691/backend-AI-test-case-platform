@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import { SessionUser } from '../../common/auth/session-user';
+import { CurrentUser } from '../../common/authorization/current-user.decorator';
 import { Permission } from '../../common/authorization/permission';
 import { RequirePermission } from '../../common/authorization/require-permission.decorator';
 import { RegenerateRequirementDto } from './dto/regenerate-requirement.dto';
@@ -11,8 +13,18 @@ export class RequirementsController {
 
   @Post('requirement-documents/upload')
   @RequirePermission(Permission.RequirementUpload)
-  upload(@Param('projectId') projectId: string, @Body() input: UploadRequirementDto) {
-    return this.requirementsService.upload(projectId, input);
+  upload(@Param('projectId') projectId: string, @Body() input: UploadRequirementDto, @CurrentUser() user: SessionUser) {
+    return this.requirementsService.upload(projectId, input, user);
+  }
+
+  @Patch('requirement-documents/current')
+  @RequirePermission(Permission.RequirementUpload)
+  updateCurrentRequirementText(
+    @Param('projectId') projectId: string,
+    @Body() input: UploadRequirementDto,
+    @CurrentUser() user: SessionUser,
+  ) {
+    return this.requirementsService.updateCurrentRequirementText(projectId, input, user);
   }
 
   @Get('requirement-versions')
@@ -38,3 +50,13 @@ export class RequirementsController {
   }
 }
 
+@Controller('projects')
+export class ProjectRequirementController {
+  constructor(private readonly requirementsService: RequirementsService) {}
+
+  @Post('from-requirement')
+  @RequirePermission(Permission.ProjectCreate)
+  createProjectFromRequirement(@Body() input: UploadRequirementDto, @CurrentUser() user: SessionUser) {
+    return this.requirementsService.createProjectFromRequirement(input, user);
+  }
+}

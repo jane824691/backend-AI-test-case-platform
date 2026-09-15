@@ -44,6 +44,8 @@ interface NextRevisionRow extends RowDataPacket {
 }
 
 export interface UpdateTestCaseVersionInput {
+  requirementSectionId?: number | null;
+  stableCaseCode?: string;
   title?: string;
   description?: string;
   preconditions?: string;
@@ -52,6 +54,17 @@ export interface UpdateTestCaseVersionInput {
   suggestedTestLevel?: string;
   reusabilityNote?: string;
   unitTestRecommended?: boolean;
+}
+
+export interface CreateAiDraftTestCaseInput {
+  title: string;
+  description: string;
+  preconditions: string[];
+  expectedResult: string;
+  priority: string;
+  suggestedTestLevel: string;
+  reusabilityNote: string | null;
+  unitTestRecommended: boolean;
 }
 
 export interface DbTestCaseSummary {
@@ -369,6 +382,231 @@ export class TestCaseRepository {
     return this.requireDetail(projectId, testCaseId);
   }
 
+  async createManualDraft(
+    projectId: number,
+    input: UpdateTestCaseVersionInput,
+    userId: number,
+  ): Promise<DbTestCaseDetail> {
+    if (!input.requirementSectionId) {
+      throw new BadRequestException('A requirement section is required to create a test case.');
+    }
+    await this.assertSectionBelongsToProject(projectId, input.requirementSectionId);
+
+    const connection = await this.pool.getConnection();
+    let testCaseId = 0;
+    try {
+      await connection.beginTransaction();
+      const [caseResult] = await connection.execute<ResultSetHeader>(
+        `INSERT INTO test_cases (
+           project_id,
+           stable_case_code,
+           current_status_code,
+           current_test_case_version_id,
+           published_test_case_version_id,
+           updated_by_user_id,
+           updated_at
+         )
+         VALUES (
+           :projectId,
+           :stableCaseCode,
+           :draftStatusCode,
+           NULL,
+           NULL,
+           :updatedByUserId,
+           CURRENT_TIMESTAMP
+         )`,
+        {
+          projectId,
+          stableCaseCode: input.stableCaseCode?.trim() || `TC-P${projectId}-MANUAL-${Date.now()}`,
+          draftStatusCode: this.statusLabelToCode(TestCaseStatus.Draft),
+          updatedByUserId: userId,
+        },
+      );
+      testCaseId = caseResult.insertId;
+
+      const [versionResult] = await connection.execute<ResultSetHeader>(
+        `INSERT INTO test_case_versions (
+           test_case_id,
+           requirement_section_id,
+           title,
+           description,
+           preconditions,
+           expected_result,
+           priority_code,
+           suggested_test_level_code,
+           reusability_note,
+           unit_test_recommended,
+           generated_by_ai,
+           revision_number,
+           updated_by_user_id,
+           updated_at
+         )
+         VALUES (
+           :testCaseId,
+           :requirementSectionId,
+           :title,
+           :description,
+           :preconditions,
+           :expectedResult,
+           :priorityCode,
+           :suggestedTestLevelCode,
+           :reusabilityNote,
+           :unitTestRecommended,
+           FALSE,
+           1,
+           :updatedByUserId,
+           CURRENT_TIMESTAMP
+         )`,
+        {
+          testCaseId,
+          requirementSectionId: input.requirementSectionId,
+          title: input.title ?? 'Untitled test case',
+          description: input.description ?? '',
+          preconditions: input.preconditions ?? null,
+          expectedResult: input.expectedResult ?? '',
+          priorityCode: this.priorityLabelToCode(input.priority ?? null),
+          suggestedTestLevelCode: this.suggestedLevelLabelToCode(input.suggestedTestLevel ?? null),
+          reusabilityNote: input.reusabilityNote ?? null,
+          unitTestRecommended: input.unitTestRecommended ?? false,
+          updatedByUserId: userId,
+        },
+      );
+
+      await connection.execute(
+        `UPDATE test_cases
+         SET current_test_case_version_id = :testCaseVersionId
+         WHERE test_case_id = :testCaseId
+           AND project_id = :projectId`,
+        {
+          testCaseVersionId: versionResult.insertId,
+          testCaseId,
+          projectId,
+        },
+      );
+
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+
+    return this.requireDetail(projectId, testCaseId);
+  }
+
+  async createAiGeneratedDrafts(
+    projectId: number,
+    requirementSectionId: number,
+    draftInputs: CreateAiDraftTestCaseInput[],
+  ): Promise<DbTestCaseDetail[]> {
+    if (draftInputs.length === 0) return [];
+
+    const createdIds: number[] = [];
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      for (const [index, draft] of draftInputs.entries()) {
+        const stableCaseCode = `TC-P${projectId}-S${requirementSectionId}-C${index + 1}`;
+        const [caseResult] = await connection.execute<ResultSetHeader>(
+          `INSERT INTO test_cases (
+             project_id,
+             stable_case_code,
+             current_status_code,
+             current_test_case_version_id,
+             published_test_case_version_id,
+             updated_by_user_id,
+             updated_at
+           )
+           VALUES (
+             :projectId,
+             :stableCaseCode,
+             :draftStatusCode,
+             NULL,
+             NULL,
+             NULL,
+             NULL
+           )`,
+          {
+            projectId,
+            stableCaseCode,
+            draftStatusCode: this.statusLabelToCode(TestCaseStatus.Draft),
+          },
+        );
+
+        const testCaseId = caseResult.insertId;
+        const [versionResult] = await connection.execute<ResultSetHeader>(
+          `INSERT INTO test_case_versions (
+             test_case_id,
+             requirement_section_id,
+             title,
+             description,
+             preconditions,
+             expected_result,
+             priority_code,
+             suggested_test_level_code,
+             reusability_note,
+             unit_test_recommended,
+             generated_by_ai,
+             revision_number,
+             updated_by_user_id,
+             updated_at
+           )
+           VALUES (
+             :testCaseId,
+             :requirementSectionId,
+             :title,
+             :description,
+             :preconditions,
+             :expectedResult,
+             :priorityCode,
+             :suggestedTestLevelCode,
+             :reusabilityNote,
+             :unitTestRecommended,
+             TRUE,
+             1,
+             NULL,
+             NULL
+           )`,
+          {
+            testCaseId,
+            requirementSectionId,
+            title: draft.title,
+            description: draft.description,
+            preconditions: draft.preconditions.length > 0 ? draft.preconditions.join('\n') : null,
+            expectedResult: draft.expectedResult,
+            priorityCode: this.priorityLabelToCode(draft.priority),
+            suggestedTestLevelCode: this.suggestedLevelLabelToCode(draft.suggestedTestLevel),
+            reusabilityNote: draft.reusabilityNote,
+            unitTestRecommended: draft.unitTestRecommended,
+          },
+        );
+
+        await connection.execute(
+          `UPDATE test_cases
+           SET current_test_case_version_id = :testCaseVersionId
+           WHERE test_case_id = :testCaseId
+             AND project_id = :projectId`,
+          {
+            testCaseVersionId: versionResult.insertId,
+            testCaseId,
+            projectId,
+          },
+        );
+        createdIds.push(testCaseId);
+      }
+
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+
+    return Promise.all(createdIds.map((testCaseId) => this.requireDetail(projectId, testCaseId)));
+  }
+
   private summaryQuery(whereClause: string): string {
     return `SELECT tc.test_case_id,
                    tc.project_id,
@@ -518,6 +756,9 @@ export class TestCaseRepository {
   }
 
   private priorityLabelToCode(priority: string | null): number {
+    if (priority === 'high') return 1;
+    if (priority === 'medium') return 2;
+    if (priority === 'low') return 3;
     if (priority === 'p1') return 1;
     if (priority === 'p2') return 2;
     if (priority === 'p3') return 3;
@@ -534,4 +775,5 @@ export class TestCaseRepository {
     if (level === 'e2e') return 2;
     return 0;
   }
+
 }
