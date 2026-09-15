@@ -60,6 +60,11 @@ export class TestCasesService {
     return { data: toTestCaseDetailResponse(updated) };
   }
 
+  async delete(projectId: string, testCaseId: string) {
+    await this.testCaseRepository.delete(Number(projectId), Number(testCaseId));
+    return { data: { projectId: Number(projectId), testCaseId: Number(testCaseId), deleted: true } };
+  }
+
   async updateResult(projectId: string, testCaseId: string, result: PassFailResult, user: SessionUser) {
     const updated = await this.testCaseRepository.updateResult(
       Number(projectId),

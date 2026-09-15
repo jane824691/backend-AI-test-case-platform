@@ -14,6 +14,7 @@ const allowedRoles: Record<Permission, Role[]> = {
   [Permission.RequirementRegenerate]: [Role.Admin, Role.PM, Role.QA],
   [Permission.TestCaseRead]: [Role.Admin, Role.PM, Role.QA, Role.Developer],
   [Permission.TestCaseEdit]: [Role.Admin, Role.PM, Role.QA],
+  [Permission.TestCaseDelete]: [Role.Admin, Role.PM, Role.QA],
   [Permission.TestCasePublish]: [Role.Admin, Role.PM, Role.QA],
   [Permission.TestCaseReopen]: [Role.Admin, Role.PM],
   [Permission.TestCaseResultUpdate]: [Role.Admin, Role.PM, Role.QA, Role.Developer],

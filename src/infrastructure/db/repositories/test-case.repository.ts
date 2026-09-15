@@ -183,9 +183,14 @@ export class TestCaseRepository {
   ): Promise<DbTestCaseDetail> {
     const current = await this.findDetail(projectId, testCaseId);
     if (!current) throw new NotFoundException(`Test case ${testCaseId} was not found for project ${projectId}.`);
-    if (current.latest_version.test_case_version_id === null || current.requirement_section_id === null) {
+    if (current.latest_version.test_case_version_id === null) {
       throw new BadRequestException('Test case has no current version to edit.');
     }
+    const requirementSectionId = input.requirementSectionId ?? current.requirement_section_id;
+    if (requirementSectionId === null) {
+      throw new BadRequestException('A requirement section is required to edit a test case.');
+    }
+    await this.assertSectionBelongsToProject(projectId, requirementSectionId);
 
     const connection = await this.pool.getConnection();
     try {
@@ -241,7 +246,7 @@ export class TestCaseRepository {
          )`,
         {
           testCaseId,
-          requirementSectionId: current.requirement_section_id,
+          requirementSectionId,
           title: input.title ?? current.latest_version.title ?? 'Untitled test case',
           description: input.description ?? current.latest_version.description ?? '',
           preconditions: input.preconditions ?? current.latest_version.preconditions,
@@ -358,6 +363,61 @@ export class TestCaseRepository {
     }
 
     return this.requireDetail(projectId, testCaseId);
+  }
+
+  async delete(projectId: number, testCaseId: number): Promise<void> {
+    const current = await this.findDetail(projectId, testCaseId);
+    if (!current) throw new NotFoundException(`Test case ${testCaseId} was not found for project ${projectId}.`);
+
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      await connection.execute(
+        `SELECT test_case_id
+         FROM test_cases
+         WHERE project_id = :projectId
+           AND test_case_id = :testCaseId
+         FOR UPDATE`,
+        { projectId, testCaseId },
+      );
+
+      await connection.execute(
+        `DELETE rr
+         FROM review_records rr
+         INNER JOIN test_case_versions tcv ON tcv.test_case_version_id = rr.test_case_version_id
+         WHERE tcv.test_case_id = :testCaseId`,
+        { testCaseId },
+      );
+
+      await connection.execute(
+        `UPDATE test_cases
+         SET current_test_case_version_id = NULL,
+             published_test_case_version_id = NULL
+         WHERE project_id = :projectId
+           AND test_case_id = :testCaseId`,
+        { projectId, testCaseId },
+      );
+
+      await connection.execute(
+        `DELETE FROM test_case_versions
+         WHERE test_case_id = :testCaseId`,
+        { testCaseId },
+      );
+
+      await connection.execute(
+        `DELETE FROM test_cases
+         WHERE project_id = :projectId
+           AND test_case_id = :testCaseId`,
+        { projectId, testCaseId },
+      );
+
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
   }
 
   async updateResult(

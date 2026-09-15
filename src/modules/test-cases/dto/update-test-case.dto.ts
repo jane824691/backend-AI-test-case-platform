@@ -1,4 +1,4 @@
-import { IsBoolean, IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export enum Priority {
   P0 = 'p0',
@@ -12,6 +12,7 @@ export enum Priority {
 export enum SuggestedTestLevel { Unit = 'unit', Integration = 'integration', E2E = 'e2e' }
 
 export class UpdateTestCaseDto {
+  @IsOptional() @IsNumber() requirementSectionId?: number;
   @IsOptional() @IsString() @MaxLength(255) title?: string;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsString() preconditions?: string;

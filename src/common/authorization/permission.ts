@@ -6,6 +6,7 @@ export enum Permission {
   RequirementRegenerate = 'requirement:regenerate',
   TestCaseRead = 'test-case:read',
   TestCaseEdit = 'test-case:edit',
+  TestCaseDelete = 'test-case:delete',
   TestCasePublish = 'test-case:publish',
   TestCaseReopen = 'test-case:reopen',
   TestCaseResultUpdate = 'test-case:result:update',
