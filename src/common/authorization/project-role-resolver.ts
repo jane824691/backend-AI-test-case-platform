@@ -19,6 +19,9 @@ export class ProjectRoleResolver {
 
     const membership = await this.projectMemberRepository.findByProjectAndUser(numericProjectId, numericUserId);
     if (!membership) {
+      if (user.isDevelopmentSession && process.env.NODE_ENV !== 'production') {
+        return user.globalRole;
+      }
       throw new ForbiddenException('The current user is not a member of this project.');
     }
     return membership.role;

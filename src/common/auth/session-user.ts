@@ -7,4 +7,5 @@ export interface SessionUser {
   globalRole: Role;
   projectRole: Role;
   roleCode?: number;
+  isDevelopmentSession?: boolean;
 }

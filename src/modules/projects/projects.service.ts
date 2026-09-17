@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { SessionUser } from '../../common/auth/session-user';
+import { Role } from '../../common/domain/role';
 import { ProjectRepository } from '../../infrastructure/db/repositories/project.repository';
 import { TestCaseRepository } from '../../infrastructure/db/repositories/test-case.repository';
 import { toProjectSummaryResponse, toProjectWorkspaceResponse } from './dto/project-response.dto';
@@ -12,7 +13,10 @@ export class ProjectsService {
   ) {}
 
   async list(user: SessionUser) {
-    const projects = await this.projectRepository.listForUser(Number(user.userId), user.globalRole);
+    const includeAllProjects = user.globalRole === Role.Developer
+      && user.isDevelopmentSession
+      && process.env.NODE_ENV !== 'production';
+    const projects = await this.projectRepository.listForUser(Number(user.userId), user.globalRole, includeAllProjects);
     const items = projects.map(toProjectSummaryResponse);
     return {
       data: {

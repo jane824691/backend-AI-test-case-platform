@@ -90,8 +90,8 @@ export interface DbRequirementSectionSummary {
 export class ProjectRepository {
   constructor(@Inject(MYSQL_POOL) private readonly pool: Pool) {}
 
-  async listForUser(userId: number, role: Role): Promise<DbProjectSummary[]> {
-    const whereClause = role === Role.Admin
+  async listForUser(userId: number, role: Role, includeAllProjects = false): Promise<DbProjectSummary[]> {
+    const whereClause = includeAllProjects || role === Role.Admin
       ? 'p.status_code = 1'
       : 'p.status_code = 1 AND EXISTS (SELECT 1 FROM project_members access_pm WHERE access_pm.project_id = p.project_id AND access_pm.user_id = :userId)';
 

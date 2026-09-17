@@ -26,6 +26,7 @@ export class AuthService {
       globalRole: dbUser.role,
       projectRole: dbUser.role,
       roleCode: dbUser.roleCode,
+      isDevelopmentSession: true,
     };
     return this.sessionStore.create(user);
   }

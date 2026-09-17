@@ -13,6 +13,7 @@ export interface UserSession {
 interface StoredSession {
   userId: number;
   expiresAt: string;
+  isDevelopmentSession?: boolean;
 }
 
 @Injectable()
@@ -36,6 +37,7 @@ export class SessionStore {
     const storedSession: StoredSession = {
       userId: Number(user.userId),
       expiresAt: session.expiresAt.toISOString(),
+      isDevelopmentSession: user.isDevelopmentSession,
     };
 
     await this.redis.set(this.sessionKey(session.id), JSON.stringify(storedSession), { EX: this.ttlSeconds });
@@ -74,6 +76,7 @@ export class SessionStore {
         globalRole: user.role,
         projectRole: user.role,
         roleCode: user.roleCode,
+        isDevelopmentSession: storedSession.isDevelopmentSession,
       },
     };
   }
@@ -90,7 +93,11 @@ export class SessionStore {
     try {
       const parsed = JSON.parse(rawSession) as Partial<StoredSession>;
       if (typeof parsed.userId !== 'number' || typeof parsed.expiresAt !== 'string') return undefined;
-      return { userId: parsed.userId, expiresAt: parsed.expiresAt };
+      return {
+        userId: parsed.userId,
+        expiresAt: parsed.expiresAt,
+        isDevelopmentSession: parsed.isDevelopmentSession === true,
+      };
     } catch {
       return undefined;
     }

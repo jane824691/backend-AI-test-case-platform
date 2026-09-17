@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { SessionUser } from '../../common/auth/session-user';
 import { PassFailResult } from '../../common/domain/test-case';
+import { Role } from '../../common/domain/role';
+import { ProjectRoleResolver } from '../../common/authorization/project-role-resolver';
 import { TestCaseRepository } from '../../infrastructure/db/repositories/test-case.repository';
 import { CreateTestCaseDto } from './dto/create-test-case.dto';
 import { toTestCaseDetailResponse, toTestCaseSummaryResponse } from './dto/test-case-response.dto';
@@ -8,17 +10,24 @@ import { UpdateTestCaseDto } from './dto/update-test-case.dto';
 
 @Injectable()
 export class TestCasesService {
-  constructor(private readonly testCaseRepository: TestCaseRepository) {}
+  constructor(
+    private readonly testCaseRepository: TestCaseRepository,
+    private readonly projectRoleResolver: ProjectRoleResolver,
+  ) {}
 
-  async list(projectId: string) {
-    const items = (await this.testCaseRepository.listByProject(Number(projectId))).map(toTestCaseSummaryResponse);
+  async list(projectId: string, user: SessionUser) {
+    const role = await this.projectRoleResolver.resolve(projectId, user);
+    const items = (await this.testCaseRepository.listByProject(Number(projectId)))
+      .filter((testCase) => role !== Role.Developer || testCase.current_status === 'published')
+      .map(toTestCaseSummaryResponse);
     return { data: { projectId: Number(projectId), items, total: items.length } };
   }
 
-  async listBySection(projectId: string, sectionId: string) {
-    const items = (await this.testCaseRepository.listBySection(Number(projectId), Number(sectionId))).map(
-      toTestCaseSummaryResponse,
-    );
+  async listBySection(projectId: string, sectionId: string, user: SessionUser) {
+    const role = await this.projectRoleResolver.resolve(projectId, user);
+    const items = (await this.testCaseRepository.listBySection(Number(projectId), Number(sectionId)))
+      .filter((testCase) => role !== Role.Developer || testCase.current_status === 'published')
+      .map(toTestCaseSummaryResponse);
     return {
       data: {
         projectId: Number(projectId),
@@ -29,9 +38,12 @@ export class TestCasesService {
     };
   }
 
-  async getDetail(projectId: string, testCaseId: string) {
+  async getDetail(projectId: string, testCaseId: string, user: SessionUser) {
+    const role = await this.projectRoleResolver.resolve(projectId, user);
     const testCase = await this.testCaseRepository.findDetail(Number(projectId), Number(testCaseId));
-    if (!testCase) throw new NotFoundException(`Test case ${testCaseId} was not found for project ${projectId}.`);
+    if (!testCase || (role === Role.Developer && testCase.current_status !== 'published')) {
+      throw new NotFoundException(`Test case ${testCaseId} was not found for project ${projectId}.`);
+    }
     return { data: toTestCaseDetailResponse(testCase) };
   }
 

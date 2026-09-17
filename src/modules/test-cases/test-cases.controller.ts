@@ -14,8 +14,8 @@ export class TestCasesController {
 
   @Get()
   @RequirePermission(Permission.TestCaseRead)
-  list(@Param('projectId') projectId: string) {
-    return this.testCasesService.list(projectId);
+  list(@Param('projectId') projectId: string, @CurrentUser() user: SessionUser) {
+    return this.testCasesService.list(projectId, user);
   }
 
   @Post()
@@ -26,8 +26,8 @@ export class TestCasesController {
 
   @Get(':testCaseId')
   @RequirePermission(Permission.TestCaseRead)
-  getDetail(@Param('projectId') projectId: string, @Param('testCaseId') testCaseId: string) {
-    return this.testCasesService.getDetail(projectId, testCaseId);
+  getDetail(@Param('projectId') projectId: string, @Param('testCaseId') testCaseId: string, @CurrentUser() user: SessionUser) {
+    return this.testCasesService.getDetail(projectId, testCaseId, user);
   }
 
   @Patch(':testCaseId')
@@ -67,7 +67,7 @@ export class SectionTestCasesController {
 
   @Get()
   @RequirePermission(Permission.TestCaseRead)
-  listBySection(@Param('projectId') projectId: string, @Param('sectionId') sectionId: string) {
-    return this.testCasesService.listBySection(projectId, sectionId);
+  listBySection(@Param('projectId') projectId: string, @Param('sectionId') sectionId: string, @CurrentUser() user: SessionUser) {
+    return this.testCasesService.listBySection(projectId, sectionId, user);
   }
 }
