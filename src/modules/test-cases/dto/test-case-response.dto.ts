@@ -26,6 +26,9 @@ export interface TestCaseSummaryResponseDto {
     testCaseVersionId: number | null;
     revisionNumber: number | null;
   };
+  automatedTestBinding: { testIdentifier: string } | null;
+  verificationStatus: 'verified' | 'not_verified' | 'not_applicable';
+  lastVerification: { commitSha: string; workflowIdentifier: string; verifiedAt: string } | null;
 }
 
 export interface TestCaseDetailResponseDto extends TestCaseSummaryResponseDto {
@@ -69,6 +72,17 @@ export function toTestCaseSummaryResponse(testCase: DbTestCaseSummary): TestCase
       testCaseVersionId: testCase.published_version.test_case_version_id,
       revisionNumber: testCase.published_version.revision_number,
     },
+    automatedTestBinding: testCase.automated_test_binding
+      ? { testIdentifier: testCase.automated_test_binding.test_identifier }
+      : null,
+    verificationStatus: testCase.verification_status,
+    lastVerification: testCase.last_verification
+      ? {
+          commitSha: testCase.last_verification.commit_sha,
+          workflowIdentifier: testCase.last_verification.workflow_identifier,
+          verifiedAt: testCase.last_verification.verified_at,
+        }
+      : null,
   };
 }
 

@@ -18,6 +18,9 @@ const allowedRoles: Record<Permission, Role[]> = {
   [Permission.TestCasePublish]: [Role.Admin, Role.PM, Role.QA],
   [Permission.TestCaseReopen]: [Role.Admin, Role.PM],
   [Permission.TestCaseResultUpdate]: [Role.Admin, Role.PM, Role.QA, Role.Developer],
+  [Permission.CiSettingsManage]: [Role.Admin],
+  [Permission.CiRunRead]: [Role.Admin, Role.PM, Role.QA, Role.Developer],
+  [Permission.AutomatedTestBindingManage]: [Role.Admin, Role.PM, Role.QA],
   [Permission.PermissionManage]: [Role.Admin],
 };
 

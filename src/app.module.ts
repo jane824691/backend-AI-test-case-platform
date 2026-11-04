@@ -6,6 +6,7 @@ import { HealthModule } from './modules/health/health.module';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { RequirementsModule } from './modules/requirements/requirements.module';
 import { TestCasesModule } from './modules/test-cases/test-cases.module';
+import { CiModule } from './modules/ci/ci.module';
 import { DatabaseModule } from './infrastructure/db/database.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { PermissionGuard } from './common/authorization/permission.guard';
@@ -21,6 +22,7 @@ import { SessionAuthGuard } from './common/authorization/session-auth.guard';
     ProjectsModule,
     RequirementsModule,
     TestCasesModule,
+    CiModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: SessionAuthGuard },

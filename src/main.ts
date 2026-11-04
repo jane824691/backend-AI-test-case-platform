@@ -4,7 +4,7 @@ import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   const frontendOrigin = process.env.FRONTEND_ORIGIN ?? 'http://localhost:3000';
 
   app.setGlobalPrefix('api/v1');

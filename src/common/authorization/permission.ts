@@ -10,5 +10,8 @@ export enum Permission {
   TestCasePublish = 'test-case:publish',
   TestCaseReopen = 'test-case:reopen',
   TestCaseResultUpdate = 'test-case:result:update',
+  CiSettingsManage = 'ci:settings:manage',
+  CiRunRead = 'ci:run:read',
+  AutomatedTestBindingManage = 'automated-test-binding:manage',
   PermissionManage = 'permission:manage',
 }
