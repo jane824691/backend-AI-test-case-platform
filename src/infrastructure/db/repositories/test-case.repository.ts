@@ -99,7 +99,7 @@ export interface DbTestCaseSummary {
     revision_number: number | null;
   };
   automated_test_binding: { test_identifier: string } | null;
-  verification_status: 'verified' | 'not_verified' | 'not_applicable';
+  verification_status: 'verified' | 'failed' | 'not_verified' | 'not_applicable';
   last_verification: { commit_sha: string; workflow_identifier: string; verified_at: string } | null;
 }
 
@@ -169,8 +169,9 @@ export class TestCaseRepository {
               version_updater.name AS version_updated_by_user_name,
               tcv.updated_at AS version_updated_at
               , binding.test_identifier AS automated_test_identifier
-              , CASE WHEN evidence.verification_evidence_id IS NOT NULL THEN 'verified'
-                     WHEN binding.automated_test_binding_id IS NULL THEN 'not_applicable'
+              , CASE WHEN binding.automated_test_binding_id IS NULL OR tc.published_test_case_version_id IS NULL THEN 'not_applicable'
+                     WHEN latest_scope_result.outcome IN ('failed', 'error') THEN 'failed'
+                     WHEN evidence.verification_evidence_id IS NOT NULL AND latest_scope_run.eligible_for_evidence = TRUE AND latest_scope_result.outcome = 'passed' THEN 'verified'
                      ELSE 'not_verified' END AS verification_status
               , run.commit_sha AS verification_commit_sha
               , run.workflow_identifier AS verification_workflow_identifier
@@ -186,6 +187,8 @@ export class TestCaseRepository {
        LEFT JOIN verification_evidence evidence ON evidence.test_case_id = tc.test_case_id AND evidence.published_test_case_version_id = tc.published_test_case_version_id AND evidence.is_current = TRUE
        LEFT JOIN ci_test_results verification_result ON verification_result.ci_test_result_id = evidence.ci_test_result_id
        LEFT JOIN ci_runs run ON run.ci_run_id = verification_result.ci_run_id
+       LEFT JOIN ci_runs latest_scope_run ON latest_scope_run.ci_run_id = (SELECT scoped.ci_run_id FROM ci_runs scoped INNER JOIN project_ci_integrations scoped_integration ON scoped_integration.project_ci_integration_id = scoped.project_ci_integration_id WHERE scoped_integration.project_id = tc.project_id AND scoped.within_verification_scope = TRUE AND scoped.ingestion_status = 'ingested' ORDER BY scoped.completed_at DESC, scoped.ci_run_id DESC LIMIT 1)
+       LEFT JOIN ci_test_results latest_scope_result ON latest_scope_result.ci_run_id = latest_scope_run.ci_run_id AND latest_scope_result.test_identifier = binding.test_identifier
        WHERE tc.project_id = :projectId
          AND tc.test_case_id = :testCaseId
        LIMIT 1`,
@@ -708,8 +711,9 @@ export class TestCaseRepository {
                    tcv.priority_code,
                    tcv.suggested_test_level_code
                    , binding.test_identifier AS automated_test_identifier
-                   , CASE WHEN evidence.verification_evidence_id IS NOT NULL THEN 'verified'
-                          WHEN binding.automated_test_binding_id IS NULL THEN 'not_applicable'
+                   , CASE WHEN binding.automated_test_binding_id IS NULL OR tc.published_test_case_version_id IS NULL THEN 'not_applicable'
+                          WHEN latest_scope_result.outcome IN ('failed', 'error') THEN 'failed'
+                          WHEN evidence.verification_evidence_id IS NOT NULL AND latest_scope_run.eligible_for_evidence = TRUE AND latest_scope_result.outcome = 'passed' THEN 'verified'
                           ELSE 'not_verified' END AS verification_status
                    , run.commit_sha AS verification_commit_sha
                    , run.workflow_identifier AS verification_workflow_identifier
@@ -724,6 +728,8 @@ export class TestCaseRepository {
             LEFT JOIN verification_evidence evidence ON evidence.test_case_id = tc.test_case_id AND evidence.published_test_case_version_id = tc.published_test_case_version_id AND evidence.is_current = TRUE
             LEFT JOIN ci_test_results verification_result ON verification_result.ci_test_result_id = evidence.ci_test_result_id
             LEFT JOIN ci_runs run ON run.ci_run_id = verification_result.ci_run_id
+            LEFT JOIN ci_runs latest_scope_run ON latest_scope_run.ci_run_id = (SELECT scoped.ci_run_id FROM ci_runs scoped INNER JOIN project_ci_integrations scoped_integration ON scoped_integration.project_ci_integration_id = scoped.project_ci_integration_id WHERE scoped_integration.project_id = tc.project_id AND scoped.within_verification_scope = TRUE AND scoped.ingestion_status = 'ingested' ORDER BY scoped.completed_at DESC, scoped.ci_run_id DESC LIMIT 1)
+            LEFT JOIN ci_test_results latest_scope_result ON latest_scope_result.ci_run_id = latest_scope_run.ci_run_id AND latest_scope_result.test_identifier = binding.test_identifier
             WHERE ${whereClause}
             ORDER BY tc.updated_at DESC, tc.test_case_id DESC`;
   }
@@ -794,7 +800,7 @@ export class TestCaseRepository {
         revision_number: row.published_revision_number,
       },
       automated_test_binding: row.automated_test_identifier ? { test_identifier: row.automated_test_identifier } : null,
-      verification_status: (row.verification_status === 'verified' || row.verification_status === 'not_verified') ? row.verification_status : 'not_applicable',
+      verification_status: (row.verification_status === 'verified' || row.verification_status === 'failed' || row.verification_status === 'not_verified') ? row.verification_status : 'not_applicable',
       last_verification: row.verification_commit_sha && row.verification_workflow_identifier && row.verification_verified_at
         ? { commit_sha: row.verification_commit_sha, workflow_identifier: row.verification_workflow_identifier, verified_at: toIsoString(row.verification_verified_at) ?? '' }
         : null,

@@ -1,29 +1,33 @@
-import { ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { createHmac, timingSafeEqual } from 'crypto';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { SessionUser } from '../../common/auth/session-user';
 import { CiRepository } from './ci.repository';
 import { UpdateAutomatedTestBindingDto, UpdateCiSettingsDto } from './dto/ci.dto';
-import { GithubArtifactService } from './github-artifact.service';
+import { CiCredentialService } from './ci-credential.service';
+import { GithubActionsPatClient } from './github-actions-pat.client';
 import { parseJUnit } from './junit.parser';
 
 @Injectable()
 export class CiService {
-  constructor(private readonly repository: CiRepository, private readonly githubArtifacts: GithubArtifactService) {}
+  constructor(private readonly repository: CiRepository, private readonly credentials: CiCredentialService, private readonly github: GithubActionsPatClient) {}
 
   async getSettings(projectId: string) {
     return { data: await this.repository.getSettings(Number(projectId)) };
   }
 
   async updateSettings(projectId: string, input: UpdateCiSettingsDto, user: SessionUser) {
+    if (input.clearPersonalAccessToken && input.personalAccessToken) throw new BadRequestException('Provide a PAT or request its removal, not both.');
     const data = await this.repository.saveSettings(Number(projectId), Number(user.userId), {
-      githubInstallationId: input.githubInstallationId,
       repositoryOwner: input.repositoryOwner,
       repositoryName: input.repositoryName,
       defaultBranch: input.defaultBranch,
-      workflowIdentifier: input.workflowIdentifier,
+      workflowId: input.workflowId,
+      workflowIdentifier: input.workflowDisplayName?.trim() || String(input.workflowId),
+      workflowDisplayName: input.workflowDisplayName,
       junitArtifactName: input.junitArtifactName ?? 'ai-test-platform-junit',
     });
-    return { data };
+    if (input.clearPersonalAccessToken) await this.repository.clearCredential(data.projectCiIntegrationId);
+    if (input.personalAccessToken) await this.repository.saveCredential(data.projectCiIntegrationId, Number(user.userId), this.credentials.encrypt(input.personalAccessToken));
+    return { data: await this.repository.getSettings(Number(projectId)) };
   }
 
   async listRuns(projectId: string) {
@@ -41,45 +45,21 @@ export class CiService {
     return { data: { projectId: Number(projectId), testCaseId: Number(testCaseId), deleted: true } };
   }
 
-  async receiveGithubWebhook(rawBody: Buffer | undefined, signature: string | undefined, payload: unknown) {
-    const secret = process.env.GITHUB_WEBHOOK_SECRET;
-    if (!secret) throw new ForbiddenException('GitHub webhook handling is disabled because GITHUB_WEBHOOK_SECRET is not configured.');
-    if (!rawBody || !signature || !this.isValidSignature(rawBody, signature, secret)) {
-      throw new UnauthorizedException('GitHub webhook signature is invalid.');
+  async syncCompletedRuns(projectId: string) {
+    const id = Number(projectId); const settings = await this.repository.getSettings(id);
+    if (!settings?.workflowId) throw new BadRequestException('Configure a GitHub workflow before syncing.');
+    const credential = await this.repository.getCredential(id);
+    if (!credential) throw new BadRequestException('Configure a GitHub PAT before syncing.');
+    const token = this.credentials.decrypt(credential);
+    const runs = await this.github.listCompletedRuns(settings.repositoryOwner, settings.repositoryName, settings.workflowId, settings.defaultBranch, token);
+    let synced = 0; let skipped = 0; let failed = 0;
+    for (const run of runs) {
+      const attempt = run.run_attempt || 1;
+      const shouldIngest = await this.repository.recordWorkflowRun(settings, { id: run.id, attempt, workflowId: run.workflow_id, workflow: run.name ?? settings.workflowDisplayName ?? String(run.workflow_id), branch: run.head_branch ?? '', sha: run.head_sha ?? '', conclusion: run.conclusion, startedAt: run.run_started_at, completedAt: run.updated_at });
+      if (!shouldIngest) { skipped += 1; continue; }
+      try { const xml = await this.github.downloadJUnit(settings.repositoryOwner, settings.repositoryName, run.id, settings.junitArtifactName, token); await this.repository.ingestJUnit(settings, run.id, attempt, parseJUnit(xml)); synced += 1; }
+      catch (error) { await this.repository.markIngestionFailed(settings, run.id, attempt, error instanceof Error ? error.message : 'Unknown JUnit ingestion error.'); failed += 1; }
     }
-    const event = payload as { repository?: { owner?: { login?: string }; name?: string }; workflow_run?: Record<string, unknown>; action?: string };
-    if (event.action !== 'completed' || !event.repository?.owner?.login || !event.repository.name || !event.workflow_run) {
-      return { data: { accepted: true, ignored: true } };
-    }
-    const settings = await this.repository.findIntegrationByRepository(event.repository.owner.login, event.repository.name);
-    if (!settings) return { data: { accepted: true, ignored: true } };
-    const run = event.workflow_run;
-    const id = Number(run.id);
-    if (!Number.isSafeInteger(id)) throw new NotFoundException('GitHub workflow run id is missing.');
-    const attempt = Number(run.run_attempt ?? 1);
-    await this.repository.recordWorkflowRun(settings, {
-      id,
-      attempt,
-      workflow: String(run.name ?? run.path ?? ''),
-      branch: String(run.head_branch ?? ''),
-      sha: String(run.head_sha ?? ''),
-      conclusion: run.conclusion === null || typeof run.conclusion === 'string' ? run.conclusion as string | null : null,
-      startedAt: typeof run.run_started_at === 'string' ? run.run_started_at : undefined,
-      completedAt: typeof run.updated_at === 'string' ? run.updated_at : undefined,
-    });
-    try {
-      const xml = await this.githubArtifacts.downloadJUnit(settings, id);
-      await this.repository.ingestJUnit(settings, id, attempt, parseJUnit(xml));
-    } catch (error) {
-      await this.repository.markIngestionFailed(settings, id, attempt, error instanceof Error ? error.message : 'Unknown JUnit ingestion error.');
-    }
-    return { data: { accepted: true, projectId: settings.projectId } };
-  }
-
-  private isValidSignature(rawBody: Buffer, signature: string, secret: string): boolean {
-    const expected = `sha256=${createHmac('sha256', secret).update(rawBody).digest('hex')}`;
-    const actualBuffer = Buffer.from(signature);
-    const expectedBuffer = Buffer.from(expected);
-    return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
+    return { data: { projectId: id, scannedRunCount: runs.length, syncedRunCount: synced, skippedRunCount: skipped, failedRunCount: failed } };
   }
 }

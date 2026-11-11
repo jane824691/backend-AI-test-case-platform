@@ -27,7 +27,7 @@ export interface TestCaseSummaryResponseDto {
     revisionNumber: number | null;
   };
   automatedTestBinding: { testIdentifier: string } | null;
-  verificationStatus: 'verified' | 'not_verified' | 'not_applicable';
+  verificationStatus: 'verified' | 'failed' | 'not_verified' | 'not_applicable';
   lastVerification: { commitSha: string; workflowIdentifier: string; verifiedAt: string } | null;
 }
 

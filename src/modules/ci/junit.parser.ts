@@ -15,7 +15,7 @@ export function parseJUnit(xml: string): ParsedJUnitTest[] {
   for (const match of xml.matchAll(testcasePattern)) {
     const attrs = match[1]; const body = match[2] ?? '';
     const testName = attribute(attrs, 'name') ?? 'Unnamed test';
-    const identifier = testName.match(/\[?(TC-[A-Za-z0-9_-]+)\]?/)?.[1] ?? null;
+    const identifier = testName.match(/^\[(TC-[A-Za-z0-9_-]+)\](?:\s|$)/)?.[1] ?? null;
     const duration = Number(attribute(attrs, 'time'));
     const failure = body.match(/<(failure|error)\b[^>]*>([\s\S]*?)<\/\1>|<(failure|error)\b([^>]*)\/>/);
     const skipped = /<skipped\b/.test(body);

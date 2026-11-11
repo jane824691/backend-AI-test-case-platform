@@ -4,9 +4,10 @@ import { ParsedJUnitTest } from './junit.parser';
 import { MYSQL_POOL } from '../../infrastructure/db/mysql-pool';
 
 export interface CiSettings {
-  projectCiIntegrationId: number; projectId: number; githubInstallationId: number;
+  projectCiIntegrationId: number; projectId: number;
   repositoryOwner: string; repositoryName: string; defaultBranch: string;
-  workflowIdentifier: string; junitArtifactName: string; updatedAt: string | null;
+  workflowId: number | null; workflowDisplayName: string | null; junitArtifactName: string; updatedAt: string | null;
+  hasPat: boolean; tokenFingerprintSuffix: string | null; credentialUpdatedAt: string | null;
 }
 
 @Injectable()
@@ -14,17 +15,28 @@ export class CiRepository {
   constructor(@Inject(MYSQL_POOL) private readonly pool: Pool) {}
 
   async getSettings(projectId: number): Promise<CiSettings | null> {
-    const [rows] = await this.pool.execute<RowDataPacket[]>(`SELECT project_ci_integration_id, project_id, github_installation_id, repository_owner, repository_name, default_branch, workflow_identifier, junit_artifact_name, updated_at FROM project_ci_integrations WHERE project_id = :projectId LIMIT 1`, { projectId });
+    const [rows] = await this.pool.execute<RowDataPacket[]>(`SELECT i.project_ci_integration_id, i.project_id, i.repository_owner, i.repository_name, i.default_branch, i.workflow_id, i.workflow_display_name, i.junit_artifact_name, i.updated_at, c.token_fingerprint, c.updated_at AS credential_updated_at FROM project_ci_integrations i LEFT JOIN project_ci_credentials c ON c.project_ci_integration_id = i.project_ci_integration_id WHERE i.project_id = :projectId LIMIT 1`, { projectId });
     return rows[0] ? this.toSettings(rows[0]) : null;
   }
 
-  async saveSettings(projectId: number, userId: number, input: Omit<CiSettings, 'projectCiIntegrationId' | 'projectId' | 'updatedAt'>): Promise<CiSettings> {
-    await this.pool.execute(`INSERT INTO project_ci_integrations (project_id, github_installation_id, repository_owner, repository_name, default_branch, workflow_identifier, junit_artifact_name, created_by_user_id)
-      VALUES (:projectId, :githubInstallationId, :repositoryOwner, :repositoryName, :defaultBranch, :workflowIdentifier, :junitArtifactName, :userId)
-      ON DUPLICATE KEY UPDATE github_installation_id = VALUES(github_installation_id), repository_owner = VALUES(repository_owner), repository_name = VALUES(repository_name), default_branch = VALUES(default_branch), workflow_identifier = VALUES(workflow_identifier), junit_artifact_name = VALUES(junit_artifact_name), updated_at = CURRENT_TIMESTAMP`, { projectId, userId, ...input });
+  async saveSettings(projectId: number, userId: number, input: { repositoryOwner: string; repositoryName: string; defaultBranch: string; workflowId: number; workflowIdentifier: string; workflowDisplayName?: string; junitArtifactName: string }): Promise<CiSettings> {
+    await this.pool.execute(`INSERT INTO project_ci_integrations (project_id, repository_owner, repository_name, default_branch, workflow_identifier, workflow_id, workflow_display_name, junit_artifact_name, created_by_user_id)
+      VALUES (:projectId, :repositoryOwner, :repositoryName, :defaultBranch, :workflowIdentifier, :workflowId, :workflowDisplayName, :junitArtifactName, :userId)
+      ON DUPLICATE KEY UPDATE repository_owner = VALUES(repository_owner), repository_name = VALUES(repository_name), default_branch = VALUES(default_branch), workflow_identifier = VALUES(workflow_identifier), workflow_id = VALUES(workflow_id), workflow_display_name = VALUES(workflow_display_name), junit_artifact_name = VALUES(junit_artifact_name), updated_at = CURRENT_TIMESTAMP`, { projectId, userId, ...input });
     const saved = await this.getSettings(projectId);
     if (!saved) throw new NotFoundException(`CI settings could not be saved for project ${projectId}.`);
     return saved;
+  }
+
+  async saveCredential(projectCiIntegrationId: number, userId: number, credential: { ciphertext: Buffer; nonce: Buffer; authTag: Buffer; keyVersion: string; fingerprint: string }): Promise<void> {
+    await this.pool.execute(`INSERT INTO project_ci_credentials (project_ci_integration_id, pat_ciphertext, encryption_nonce, encryption_auth_tag, key_version, token_fingerprint, updated_by_user_id) VALUES (:projectCiIntegrationId, :ciphertext, :nonce, :authTag, :keyVersion, :fingerprint, :userId) ON DUPLICATE KEY UPDATE pat_ciphertext = VALUES(pat_ciphertext), encryption_nonce = VALUES(encryption_nonce), encryption_auth_tag = VALUES(encryption_auth_tag), key_version = VALUES(key_version), token_fingerprint = VALUES(token_fingerprint), updated_by_user_id = VALUES(updated_by_user_id), updated_at = CURRENT_TIMESTAMP`, { projectCiIntegrationId, userId, ...credential });
+  }
+
+  async clearCredential(projectCiIntegrationId: number): Promise<void> { await this.pool.execute('DELETE FROM project_ci_credentials WHERE project_ci_integration_id = :projectCiIntegrationId', { projectCiIntegrationId }); }
+
+  async getCredential(projectId: number): Promise<{ ciphertext: Buffer; nonce: Buffer; authTag: Buffer } | null> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(`SELECT c.pat_ciphertext, c.encryption_nonce, c.encryption_auth_tag FROM project_ci_credentials c INNER JOIN project_ci_integrations i ON i.project_ci_integration_id = c.project_ci_integration_id WHERE i.project_id = :projectId LIMIT 1`, { projectId });
+    return rows[0] ? { ciphertext: Buffer.from(rows[0].pat_ciphertext), nonce: Buffer.from(rows[0].encryption_nonce), authTag: Buffer.from(rows[0].encryption_auth_tag) } : null;
   }
 
   async upsertBinding(projectId: number, testCaseId: number, testIdentifier: string, userId: number) {
@@ -49,39 +61,42 @@ export class CiRepository {
   }
 
   async listRuns(projectId: number) {
-    const [rows] = await this.pool.execute<RowDataPacket[]>(`SELECT r.ci_run_id, r.github_run_id, r.github_run_attempt, r.workflow_identifier, r.branch_name, r.commit_sha, r.conclusion, r.eligible_for_verification, r.ingestion_status, r.started_at, r.completed_at, r.ingested_at, r.error_message
+    const [rows] = await this.pool.execute<RowDataPacket[]>(`SELECT r.ci_run_id, r.github_run_id, r.github_run_attempt, r.workflow_identifier, r.workflow_id, r.branch_name, r.commit_sha, r.conclusion, r.within_verification_scope, r.eligible_for_evidence, r.ingestion_status, r.started_at, r.completed_at, r.ingested_at, r.error_message
       FROM ci_runs r INNER JOIN project_ci_integrations i ON i.project_ci_integration_id = r.project_ci_integration_id WHERE i.project_id = :projectId ORDER BY r.completed_at DESC, r.ci_run_id DESC`, { projectId });
     return rows.map((row) => this.camel(row));
   }
 
-  async findIntegrationByRepository(owner: string, name: string): Promise<CiSettings | null> {
-    const [rows] = await this.pool.execute<RowDataPacket[]>('SELECT project_ci_integration_id, project_id, github_installation_id, repository_owner, repository_name, default_branch, workflow_identifier, junit_artifact_name, updated_at FROM project_ci_integrations WHERE repository_owner = :owner AND repository_name = :name LIMIT 1', { owner, name });
-    return rows[0] ? this.toSettings(rows[0]) : null;
-  }
-
-  async recordWorkflowRun(settings: CiSettings, run: { id: number; attempt: number; workflow: string; branch: string; sha: string; conclusion: string | null; startedAt?: string; completedAt?: string }) {
-    const eligible = run.branch === settings.defaultBranch && run.workflow === settings.workflowIdentifier && run.conclusion === 'success';
-    await this.pool.execute(`INSERT INTO ci_runs (project_ci_integration_id, github_run_id, github_run_attempt, workflow_identifier, branch_name, commit_sha, conclusion, eligible_for_verification, ingestion_status, started_at, completed_at)
-      VALUES (:integrationId, :runId, :attempt, :workflow, :branch, :sha, :conclusion, :eligible, 'pending_artifact', :startedAt, :completedAt)
-      ON DUPLICATE KEY UPDATE conclusion = VALUES(conclusion), eligible_for_verification = VALUES(eligible_for_verification), ingestion_status = VALUES(ingestion_status), started_at = VALUES(started_at), completed_at = VALUES(completed_at)`, { integrationId: settings.projectCiIntegrationId, runId: run.id, attempt: run.attempt, workflow: run.workflow, branch: run.branch, sha: run.sha, conclusion: run.conclusion, eligible, startedAt: run.startedAt ?? null, completedAt: run.completedAt ?? null });
+  async recordWorkflowRun(settings: CiSettings, run: { id: number; attempt: number; workflowId: number; workflow: string; branch: string; sha: string; conclusion: string | null; startedAt?: string | null; completedAt?: string | null }) {
+    const [existing] = await this.pool.execute<RowDataPacket[]>('SELECT ci_run_id, ingestion_status FROM ci_runs WHERE project_ci_integration_id = :integrationId AND github_run_id = :runId AND github_run_attempt = :attempt LIMIT 1', { integrationId: settings.projectCiIntegrationId, runId: run.id, attempt: run.attempt });
+    if (existing[0]?.ingestion_status === 'ingested') return false;
+    const withinScope = run.branch === settings.defaultBranch && run.workflowId === settings.workflowId;
+    const eligibleForEvidence = withinScope && run.conclusion === 'success';
+    await this.pool.execute(`INSERT INTO ci_runs (project_ci_integration_id, github_run_id, github_run_attempt, workflow_identifier, workflow_id, branch_name, commit_sha, conclusion, within_verification_scope, eligible_for_evidence, ingestion_status, started_at, completed_at)
+      VALUES (:integrationId, :runId, :attempt, :workflow, :workflowId, :branch, :sha, :conclusion, :withinScope, :eligibleForEvidence, 'pending_artifact', :startedAt, :completedAt)
+      ON DUPLICATE KEY UPDATE workflow_identifier = VALUES(workflow_identifier), workflow_id = VALUES(workflow_id), branch_name = VALUES(branch_name), commit_sha = VALUES(commit_sha), conclusion = VALUES(conclusion), within_verification_scope = VALUES(within_verification_scope), eligible_for_evidence = VALUES(eligible_for_evidence), ingestion_status = 'pending_artifact', started_at = VALUES(started_at), completed_at = VALUES(completed_at), error_message = NULL`, { integrationId: settings.projectCiIntegrationId, runId: run.id, attempt: run.attempt, workflow: run.workflow, workflowId: run.workflowId, branch: run.branch, sha: run.sha, conclusion: run.conclusion, withinScope, eligibleForEvidence, startedAt: run.startedAt ?? null, completedAt: run.completedAt ?? null });
+    return true;
   }
 
   async ingestJUnit(settings: CiSettings, runId: number, attempt: number, tests: ParsedJUnitTest[]): Promise<void> {
     const connection = await this.pool.getConnection();
     try {
       await connection.beginTransaction();
-      const [runRows] = await connection.execute<RowDataPacket[]>('SELECT ci_run_id, eligible_for_verification FROM ci_runs WHERE project_ci_integration_id = :integrationId AND github_run_id = :runId AND github_run_attempt = :attempt FOR UPDATE', { integrationId: settings.projectCiIntegrationId, runId, attempt });
+      const [runRows] = await connection.execute<RowDataPacket[]>('SELECT ci_run_id, eligible_for_evidence FROM ci_runs WHERE project_ci_integration_id = :integrationId AND github_run_id = :runId AND github_run_attempt = :attempt FOR UPDATE', { integrationId: settings.projectCiIntegrationId, runId, attempt });
       if (!runRows[0]) throw new NotFoundException(`CI run ${runId}/${attempt} was not recorded.`);
-      const ciRunId = Number(runRows[0].ci_run_id); const eligible = Boolean(runRows[0].eligible_for_verification);
-      await connection.execute(`DELETE evidence FROM verification_evidence evidence INNER JOIN ci_test_results result ON result.ci_test_result_id = evidence.ci_test_result_id WHERE result.ci_run_id = :ciRunId`, { ciRunId });
+      const ciRunId = Number(runRows[0].ci_run_id); const eligible = Boolean(runRows[0].eligible_for_evidence);
+      await connection.execute('DELETE FROM ci_run_warnings WHERE ci_run_id = :ciRunId', { ciRunId });
       await connection.execute('DELETE FROM ci_test_results WHERE ci_run_id = :ciRunId', { ciRunId });
-      if (eligible) await connection.execute(`UPDATE verification_evidence evidence INNER JOIN automated_test_bindings binding ON binding.automated_test_binding_id = evidence.automated_test_binding_id SET evidence.is_current = FALSE WHERE binding.project_id = :projectId AND evidence.is_current = TRUE`, { projectId: settings.projectId });
+      const seenIdentifiers = new Set<string>();
       for (const test of tests) {
         const [insert] = await connection.execute<ResultSetHeader>(`INSERT INTO ci_test_results (ci_run_id, test_identifier, suite_name, test_name, outcome, duration_ms, failure_message) VALUES (:ciRunId, :identifier, :suiteName, :testName, :outcome, :durationMs, :failureMessage)`, { ciRunId, identifier: test.identifier, suiteName: test.suiteName, testName: test.testName, outcome: test.outcome, durationMs: test.durationMs, failureMessage: test.failureMessage });
-        if (!eligible || test.outcome !== 'passed' || !test.identifier) continue;
+        if (!test.identifier) { await connection.execute('INSERT INTO ci_run_warnings (ci_run_id, warning_code, message) VALUES (:ciRunId, :warningCode, :message)', { ciRunId, warningCode: 'UNMATCHED_TEST', message: `JUnit test ${test.testName} has no valid TC identifier.` }); continue; }
+        if (seenIdentifiers.has(test.identifier)) { await connection.execute('INSERT INTO ci_run_warnings (ci_run_id, warning_code, message) VALUES (:ciRunId, :warningCode, :message)', { ciRunId, warningCode: 'DUPLICATE_IDENTIFIER', message: `JUnit identifier ${test.identifier} appeared more than once.` }); continue; }
+        seenIdentifiers.add(test.identifier);
+        if (!eligible || test.outcome !== 'passed') continue;
         const [bindingRows] = await connection.execute<RowDataPacket[]>(`SELECT binding.automated_test_binding_id, binding.test_case_id, test_case.published_test_case_version_id FROM automated_test_bindings binding INNER JOIN test_cases test_case ON test_case.test_case_id = binding.test_case_id WHERE binding.project_id = :projectId AND binding.test_identifier = :identifier AND test_case.published_test_case_version_id IS NOT NULL LIMIT 1`, { projectId: settings.projectId, identifier: test.identifier });
         const binding = bindingRows[0];
-        if (!binding) continue;
+        if (!binding) { await connection.execute('INSERT INTO ci_run_warnings (ci_run_id, warning_code, message) VALUES (:ciRunId, :warningCode, :message)', { ciRunId, warningCode: 'UNBOUND_IDENTIFIER', message: `JUnit identifier ${test.identifier} is not bound to a published Test Case.` }); continue; }
+        await connection.execute('UPDATE verification_evidence SET is_current = FALSE WHERE test_case_id = :testCaseId AND is_current = TRUE', { testCaseId: binding.test_case_id });
         await connection.execute(`INSERT INTO verification_evidence (test_case_id, published_test_case_version_id, automated_test_binding_id, ci_test_result_id, is_current) VALUES (:testCaseId, :versionId, :bindingId, :resultId, TRUE)`, { testCaseId: binding.test_case_id, versionId: binding.published_test_case_version_id, bindingId: binding.automated_test_binding_id, resultId: insert.insertId });
       }
       await connection.execute(`UPDATE ci_runs SET ingestion_status = 'ingested', ingested_at = CURRENT_TIMESTAMP, error_message = NULL WHERE ci_run_id = :ciRunId`, { ciRunId });
@@ -97,7 +112,8 @@ export class CiRepository {
   }
 
   private toSettings(row: RowDataPacket): CiSettings {
-    return { projectCiIntegrationId: Number(row.project_ci_integration_id), projectId: Number(row.project_id), githubInstallationId: Number(row.github_installation_id), repositoryOwner: row.repository_owner, repositoryName: row.repository_name, defaultBranch: row.default_branch, workflowIdentifier: row.workflow_identifier, junitArtifactName: row.junit_artifact_name, updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null };
+    const fingerprint = row.token_fingerprint as string | null;
+    return { projectCiIntegrationId: Number(row.project_ci_integration_id), projectId: Number(row.project_id), repositoryOwner: row.repository_owner, repositoryName: row.repository_name, defaultBranch: row.default_branch, workflowId: row.workflow_id === null ? null : Number(row.workflow_id), workflowDisplayName: row.workflow_display_name, junitArtifactName: row.junit_artifact_name, updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null, hasPat: Boolean(fingerprint), tokenFingerprintSuffix: fingerprint ? fingerprint.slice(-8) : null, credentialUpdatedAt: row.credential_updated_at ? new Date(row.credential_updated_at).toISOString() : null };
   }
 
   private camel(row: RowDataPacket) {

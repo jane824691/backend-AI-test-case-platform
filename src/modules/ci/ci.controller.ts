@@ -1,9 +1,7 @@
-import { Body, Controller, Delete, Get, Headers, Param, Put, Post, Req } from '@nestjs/common';
-import { Request } from 'express';
+import { Body, Controller, Delete, Get, Param, Put, Post } from '@nestjs/common';
 import { CurrentUser } from '../../common/authorization/current-user.decorator';
 import { Permission } from '../../common/authorization/permission';
 import { RequirePermission } from '../../common/authorization/require-permission.decorator';
-import { Public } from '../../common/authorization/public.decorator';
 import { SessionUser } from '../../common/auth/session-user';
 import { CiService } from './ci.service';
 import { UpdateAutomatedTestBindingDto, UpdateCiSettingsDto } from './dto/ci.dto';
@@ -21,19 +19,12 @@ export class ProjectCiController {
   @Get('ci-runs') @RequirePermission(Permission.CiRunRead)
   listRuns(@Param('projectId') projectId: string) { return this.service.listRuns(projectId); }
 
+  @Post('ci-sync') @RequirePermission(Permission.CiSyncTrigger)
+  sync(@Param('projectId') projectId: string) { return this.service.syncCompletedRuns(projectId); }
+
   @Put('test-cases/:testCaseId/automated-test-binding') @RequirePermission(Permission.AutomatedTestBindingManage)
   bind(@Param('projectId') projectId: string, @Param('testCaseId') testCaseId: string, @Body() input: UpdateAutomatedTestBindingDto, @CurrentUser() user: SessionUser) { return this.service.upsertBinding(projectId, testCaseId, input, user); }
 
   @Delete('test-cases/:testCaseId/automated-test-binding') @RequirePermission(Permission.AutomatedTestBindingManage)
   unbind(@Param('projectId') projectId: string, @Param('testCaseId') testCaseId: string) { return this.service.deleteBinding(projectId, testCaseId); }
-}
-
-@Controller('integrations/github')
-export class GithubWebhookController {
-  constructor(private readonly service: CiService) {}
-
-  @Post('webhooks') @Public()
-  receive(@Req() request: Request & { rawBody?: Buffer }, @Headers('x-hub-signature-256') signature: string | undefined, @Body() payload: unknown) {
-    return this.service.receiveGithubWebhook(request.rawBody, signature, payload);
-  }
 }
