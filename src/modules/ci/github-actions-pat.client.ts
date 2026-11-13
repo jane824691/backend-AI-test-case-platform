@@ -19,10 +19,12 @@ export class GithubActionsPatClient {
 
   async downloadTestReport(owner: string, repo: string, runId: number, artifactName: string, token: string): Promise<DownloadedTestReport> {
     const base = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-    const artifacts = await this.githubJson<{ artifacts: Array<{ id: number; name: string; expired: boolean }> }>(`${base}/actions/runs/${runId}/artifacts?per_page=100`, token);
-    const matches = artifacts.artifacts.filter((item) => item.name === artifactName && !item.expired);
-    if (matches.length !== 1) throw new Error(matches.length ? `Multiple active artifacts named '${artifactName}' were found.` : `Test-report artifact '${artifactName}' was not found or has expired.`);
-    const response = await fetch(`${base}/actions/artifacts/${matches[0].id}/zip`, { headers: this.headers(token), redirect: 'follow' });
+    const artifacts = await this.githubJson<{ artifacts: Array<{ id: number; name: string; expired: boolean; created_at?: string | null }> }>(`${base}/actions/runs/${runId}/artifacts?per_page=100`, token);
+    const artifact = artifacts.artifacts
+      .filter((item) => item.name === artifactName && !item.expired)
+      .sort((left, right) => (Date.parse(right.created_at ?? '') || 0) - (Date.parse(left.created_at ?? '') || 0) || right.id - left.id)[0];
+    if (!artifact) throw new Error(`Test-report artifact '${artifactName}' was not found or has expired.`);
+    const response = await fetch(`${base}/actions/artifacts/${artifact.id}/zip`, { headers: this.headers(token), redirect: 'follow' });
     if (!response.ok) throw new Error(`GitHub artifact download failed with HTTP ${response.status}.`);
     return this.extractSingleReport(Buffer.from(await response.arrayBuffer()));
   }
