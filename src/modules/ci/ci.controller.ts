@@ -19,6 +19,9 @@ export class ProjectCiController {
   @Get('ci-runs') @RequirePermission(Permission.CiRunRead)
   listRuns(@Param('projectId') projectId: string) { return this.service.listRuns(projectId); }
 
+  @Get('ci-runs/:ciRunId/test-results') @RequirePermission(Permission.CiRunRead)
+  listTestResults(@Param('projectId') projectId: string, @Param('ciRunId') ciRunId: string) { return this.service.listTestResults(projectId, ciRunId); }
+
   @Post('ci-sync') @RequirePermission(Permission.CiSyncTrigger)
   sync(@Param('projectId') projectId: string) { return this.service.syncCompletedRuns(projectId); }
 

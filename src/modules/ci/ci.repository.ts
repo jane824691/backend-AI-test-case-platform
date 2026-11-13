@@ -1,5 +1,5 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
+import { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { ParsedJUnitTest } from './junit.parser';
 import { MYSQL_POOL } from '../../infrastructure/db/mysql-pool';
 
@@ -7,7 +7,6 @@ export interface CiSettings {
   projectCiIntegrationId: number; projectId: number;
   repositoryOwner: string; repositoryName: string; defaultBranch: string;
   workflowId: number | null; workflowDisplayName: string | null; junitArtifactName: string; updatedAt: string | null;
-  hasPat: boolean; tokenFingerprintSuffix: string | null; credentialUpdatedAt: string | null;
 }
 
 @Injectable()
@@ -15,7 +14,7 @@ export class CiRepository {
   constructor(@Inject(MYSQL_POOL) private readonly pool: Pool) {}
 
   async getSettings(projectId: number): Promise<CiSettings | null> {
-    const [rows] = await this.pool.execute<RowDataPacket[]>(`SELECT i.project_ci_integration_id, i.project_id, i.repository_owner, i.repository_name, i.default_branch, i.workflow_id, i.workflow_display_name, i.junit_artifact_name, i.updated_at, c.token_fingerprint, c.updated_at AS credential_updated_at FROM project_ci_integrations i LEFT JOIN project_ci_credentials c ON c.project_ci_integration_id = i.project_ci_integration_id WHERE i.project_id = :projectId LIMIT 1`, { projectId });
+    const [rows] = await this.pool.execute<RowDataPacket[]>(`SELECT i.project_ci_integration_id, i.project_id, i.repository_owner, i.repository_name, i.default_branch, i.workflow_id, i.workflow_display_name, i.junit_artifact_name, i.updated_at FROM project_ci_integrations i WHERE i.project_id = :projectId LIMIT 1`, { projectId });
     return rows[0] ? this.toSettings(rows[0]) : null;
   }
 
@@ -28,26 +27,27 @@ export class CiRepository {
     return saved;
   }
 
-  async saveCredential(projectCiIntegrationId: number, userId: number, credential: { ciphertext: Buffer; nonce: Buffer; authTag: Buffer; keyVersion: string; fingerprint: string }): Promise<void> {
-    await this.pool.execute(`INSERT INTO project_ci_credentials (project_ci_integration_id, pat_ciphertext, encryption_nonce, encryption_auth_tag, key_version, token_fingerprint, updated_by_user_id) VALUES (:projectCiIntegrationId, :ciphertext, :nonce, :authTag, :keyVersion, :fingerprint, :userId) ON DUPLICATE KEY UPDATE pat_ciphertext = VALUES(pat_ciphertext), encryption_nonce = VALUES(encryption_nonce), encryption_auth_tag = VALUES(encryption_auth_tag), key_version = VALUES(key_version), token_fingerprint = VALUES(token_fingerprint), updated_by_user_id = VALUES(updated_by_user_id), updated_at = CURRENT_TIMESTAMP`, { projectCiIntegrationId, userId, ...credential });
-  }
-
-  async clearCredential(projectCiIntegrationId: number): Promise<void> { await this.pool.execute('DELETE FROM project_ci_credentials WHERE project_ci_integration_id = :projectCiIntegrationId', { projectCiIntegrationId }); }
-
-  async getCredential(projectId: number): Promise<{ ciphertext: Buffer; nonce: Buffer; authTag: Buffer } | null> {
-    const [rows] = await this.pool.execute<RowDataPacket[]>(`SELECT c.pat_ciphertext, c.encryption_nonce, c.encryption_auth_tag FROM project_ci_credentials c INNER JOIN project_ci_integrations i ON i.project_ci_integration_id = c.project_ci_integration_id WHERE i.project_id = :projectId LIMIT 1`, { projectId });
-    return rows[0] ? { ciphertext: Buffer.from(rows[0].pat_ciphertext), nonce: Buffer.from(rows[0].encryption_nonce), authTag: Buffer.from(rows[0].encryption_auth_tag) } : null;
-  }
-
   async upsertBinding(projectId: number, testCaseId: number, testIdentifier: string, userId: number) {
-    const [caseRows] = await this.pool.execute<RowDataPacket[]>('SELECT test_case_id FROM test_cases WHERE project_id = :projectId AND test_case_id = :testCaseId LIMIT 1', { projectId, testCaseId });
-    if (!caseRows[0]) throw new NotFoundException(`Test case ${testCaseId} was not found for project ${projectId}.`);
-    const [identifierRows] = await this.pool.execute<RowDataPacket[]>('SELECT test_case_id FROM automated_test_bindings WHERE project_id = :projectId AND test_identifier = :testIdentifier LIMIT 1', { projectId, testIdentifier });
-    if (identifierRows[0] && Number(identifierRows[0].test_case_id) !== testCaseId) {
-      throw new ConflictException(`Automated test identifier ${testIdentifier} is already bound to another Test Case.`);
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [caseRows] = await connection.execute<RowDataPacket[]>('SELECT test_case_id FROM test_cases WHERE project_id = :projectId AND test_case_id = :testCaseId LIMIT 1 FOR UPDATE', { projectId, testCaseId });
+      if (!caseRows[0]) throw new NotFoundException(`Test case ${testCaseId} was not found for project ${projectId}.`);
+      const [identifierRows] = await connection.execute<RowDataPacket[]>('SELECT test_case_id FROM automated_test_bindings WHERE project_id = :projectId AND test_identifier = :testIdentifier LIMIT 1 FOR UPDATE', { projectId, testIdentifier });
+      if (identifierRows[0] && Number(identifierRows[0].test_case_id) !== testCaseId) {
+        throw new ConflictException(`Automated test identifier ${testIdentifier} is already bound to another Test Case.`);
+      }
+      await connection.execute(`INSERT INTO automated_test_bindings (project_id, test_case_id, test_identifier, created_by_user_id) VALUES (:projectId, :testCaseId, :testIdentifier, :userId)
+        ON DUPLICATE KEY UPDATE test_identifier = VALUES(test_identifier), created_by_user_id = VALUES(created_by_user_id), updated_at = CURRENT_TIMESTAMP`, { projectId, testCaseId, testIdentifier, userId });
+      const [bindingRows] = await connection.execute<RowDataPacket[]>('SELECT automated_test_binding_id FROM automated_test_bindings WHERE project_id = :projectId AND test_case_id = :testCaseId LIMIT 1 FOR UPDATE', { projectId, testCaseId });
+      await this.recomputeVerificationEvidence(connection, projectId, testCaseId, Number(bindingRows[0].automated_test_binding_id), testIdentifier);
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
     }
-    await this.pool.execute(`INSERT INTO automated_test_bindings (project_id, test_case_id, test_identifier, created_by_user_id) VALUES (:projectId, :testCaseId, :testIdentifier, :userId)
-      ON DUPLICATE KEY UPDATE test_identifier = VALUES(test_identifier), created_by_user_id = VALUES(created_by_user_id), updated_at = CURRENT_TIMESTAMP`, { projectId, testCaseId, testIdentifier, userId });
     return this.getBinding(projectId, testCaseId);
   }
 
@@ -66,14 +66,26 @@ export class CiRepository {
     return rows.map((row) => this.camel(row));
   }
 
+  async listTestResults(projectId: number, ciRunId: number) {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(`SELECT result.ci_test_result_id, result.test_identifier, result.suite_name, result.test_name, result.outcome, result.duration_ms, result.failure_message
+      FROM ci_test_results result
+      INNER JOIN ci_runs run ON run.ci_run_id = result.ci_run_id
+      INNER JOIN project_ci_integrations integration ON integration.project_ci_integration_id = run.project_ci_integration_id
+      WHERE integration.project_id = :projectId AND result.ci_run_id = :ciRunId AND result.test_identifier IS NOT NULL
+      ORDER BY result.ci_test_result_id ASC`, { projectId, ciRunId });
+    return rows.map((row) => this.camel(row));
+  }
+
   async recordWorkflowRun(settings: CiSettings, run: { id: number; attempt: number; workflowId: number; workflow: string; branch: string; sha: string; conclusion: string | null; startedAt?: string | null; completedAt?: string | null }) {
     const [existing] = await this.pool.execute<RowDataPacket[]>('SELECT ci_run_id, ingestion_status FROM ci_runs WHERE project_ci_integration_id = :integrationId AND github_run_id = :runId AND github_run_attempt = :attempt LIMIT 1', { integrationId: settings.projectCiIntegrationId, runId: run.id, attempt: run.attempt });
     if (existing[0]?.ingestion_status === 'ingested') return false;
     const withinScope = run.branch === settings.defaultBranch && run.workflowId === settings.workflowId;
     const eligibleForEvidence = withinScope && run.conclusion === 'success';
+    const startedAt = this.toMysqlUtcDateTime(run.startedAt);
+    const completedAt = this.toMysqlUtcDateTime(run.completedAt);
     await this.pool.execute(`INSERT INTO ci_runs (project_ci_integration_id, github_run_id, github_run_attempt, workflow_identifier, workflow_id, branch_name, commit_sha, conclusion, within_verification_scope, eligible_for_evidence, ingestion_status, started_at, completed_at)
       VALUES (:integrationId, :runId, :attempt, :workflow, :workflowId, :branch, :sha, :conclusion, :withinScope, :eligibleForEvidence, 'pending_artifact', :startedAt, :completedAt)
-      ON DUPLICATE KEY UPDATE workflow_identifier = VALUES(workflow_identifier), workflow_id = VALUES(workflow_id), branch_name = VALUES(branch_name), commit_sha = VALUES(commit_sha), conclusion = VALUES(conclusion), within_verification_scope = VALUES(within_verification_scope), eligible_for_evidence = VALUES(eligible_for_evidence), ingestion_status = 'pending_artifact', started_at = VALUES(started_at), completed_at = VALUES(completed_at), error_message = NULL`, { integrationId: settings.projectCiIntegrationId, runId: run.id, attempt: run.attempt, workflow: run.workflow, workflowId: run.workflowId, branch: run.branch, sha: run.sha, conclusion: run.conclusion, withinScope, eligibleForEvidence, startedAt: run.startedAt ?? null, completedAt: run.completedAt ?? null });
+      ON DUPLICATE KEY UPDATE workflow_identifier = VALUES(workflow_identifier), workflow_id = VALUES(workflow_id), branch_name = VALUES(branch_name), commit_sha = VALUES(commit_sha), conclusion = VALUES(conclusion), within_verification_scope = VALUES(within_verification_scope), eligible_for_evidence = VALUES(eligible_for_evidence), ingestion_status = 'pending_artifact', started_at = VALUES(started_at), completed_at = VALUES(completed_at), error_message = NULL`, { integrationId: settings.projectCiIntegrationId, runId: run.id, attempt: run.attempt, workflow: run.workflow, workflowId: run.workflowId, branch: run.branch, sha: run.sha, conclusion: run.conclusion, withinScope, eligibleForEvidence, startedAt, completedAt });
     return true;
   }
 
@@ -112,8 +124,37 @@ export class CiRepository {
   }
 
   private toSettings(row: RowDataPacket): CiSettings {
-    const fingerprint = row.token_fingerprint as string | null;
-    return { projectCiIntegrationId: Number(row.project_ci_integration_id), projectId: Number(row.project_id), repositoryOwner: row.repository_owner, repositoryName: row.repository_name, defaultBranch: row.default_branch, workflowId: row.workflow_id === null ? null : Number(row.workflow_id), workflowDisplayName: row.workflow_display_name, junitArtifactName: row.junit_artifact_name, updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null, hasPat: Boolean(fingerprint), tokenFingerprintSuffix: fingerprint ? fingerprint.slice(-8) : null, credentialUpdatedAt: row.credential_updated_at ? new Date(row.credential_updated_at).toISOString() : null };
+    return { projectCiIntegrationId: Number(row.project_ci_integration_id), projectId: Number(row.project_id), repositoryOwner: row.repository_owner, repositoryName: row.repository_name, defaultBranch: row.default_branch, workflowId: row.workflow_id === null ? null : Number(row.workflow_id), workflowDisplayName: row.workflow_display_name, junitArtifactName: row.junit_artifact_name, updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null };
+  }
+
+  private async recomputeVerificationEvidence(connection: PoolConnection, projectId: number, testCaseId: number, bindingId: number, testIdentifier: string): Promise<void> {
+    await connection.execute('UPDATE verification_evidence SET is_current = FALSE WHERE test_case_id = :testCaseId AND is_current = TRUE', { testCaseId });
+    const [caseRows] = await connection.execute<RowDataPacket[]>('SELECT published_test_case_version_id FROM test_cases WHERE project_id = :projectId AND test_case_id = :testCaseId LIMIT 1 FOR UPDATE', { projectId, testCaseId });
+    const publishedVersionId = caseRows[0]?.published_test_case_version_id;
+    if (publishedVersionId === null || publishedVersionId === undefined) return;
+    const [resultRows] = await connection.execute<RowDataPacket[]>(`SELECT result.ci_test_result_id
+      FROM ci_test_results result
+      INNER JOIN ci_runs run ON run.ci_run_id = result.ci_run_id
+      INNER JOIN project_ci_integrations integration ON integration.project_ci_integration_id = run.project_ci_integration_id
+      WHERE integration.project_id = :projectId
+        AND result.test_identifier = :testIdentifier
+        AND result.outcome = 'passed'
+        AND run.within_verification_scope = TRUE
+        AND run.eligible_for_evidence = TRUE
+        AND run.ingestion_status = 'ingested'
+      ORDER BY run.completed_at DESC, run.ci_run_id DESC, result.ci_test_result_id DESC
+      LIMIT 1`, { projectId, testIdentifier });
+    if (!resultRows[0]) return;
+    await connection.execute(`INSERT INTO verification_evidence (test_case_id, published_test_case_version_id, automated_test_binding_id, ci_test_result_id, is_current)
+      VALUES (:testCaseId, :publishedVersionId, :bindingId, :resultId, TRUE)
+      ON DUPLICATE KEY UPDATE test_case_id = VALUES(test_case_id), published_test_case_version_id = VALUES(published_test_case_version_id), automated_test_binding_id = VALUES(automated_test_binding_id), is_current = TRUE`, { testCaseId, publishedVersionId, bindingId, resultId: resultRows[0].ci_test_result_id });
+  }
+
+  private toMysqlUtcDateTime(value?: string | null): string | null {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) throw new Error(`Invalid GitHub timestamp: ${value}`);
+    return date.toISOString().slice(0, 19).replace('T', ' ');
   }
 
   private camel(row: RowDataPacket) {

@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 export class UpdateCiSettingsDto {
   @IsString() @Matches(/^[A-Za-z0-9_.-]+$/) repositoryOwner!: string;
@@ -7,8 +7,6 @@ export class UpdateCiSettingsDto {
   @IsNumber() workflowId!: number;
   @IsOptional() @IsString() @MaxLength(255) workflowDisplayName?: string;
   @IsOptional() @IsString() @MaxLength(255) junitArtifactName?: string;
-  @IsOptional() @IsString() @MinLength(1) personalAccessToken?: string;
-  @IsOptional() clearPersonalAccessToken?: boolean;
 }
 
 export class UpdateAutomatedTestBindingDto {

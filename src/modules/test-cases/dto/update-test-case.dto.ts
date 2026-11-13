@@ -13,6 +13,7 @@ export enum SuggestedTestLevel { Unit = 'unit', Integration = 'integration', E2E
 
 export class UpdateTestCaseDto {
   @IsOptional() @IsNumber() requirementSectionId?: number;
+  @IsOptional() @IsString() @MaxLength(100) stableCaseCode?: string;
   @IsOptional() @IsString() @MaxLength(255) title?: string;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsString() preconditions?: string;

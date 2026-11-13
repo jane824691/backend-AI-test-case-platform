@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { PassFailResult, TestCaseStatus } from '../../../common/domain/test-case';
 import { MYSQL_POOL } from '../mysql-pool';
@@ -213,6 +213,16 @@ export class TestCaseRepository {
       throw new BadRequestException('A requirement section is required to edit a test case.');
     }
     await this.assertSectionBelongsToProject(projectId, requirementSectionId);
+    const stableCaseCode = input.stableCaseCode?.trim() || undefined;
+    if (stableCaseCode && stableCaseCode !== current.stable_case_code) {
+      const [sameCodeRows] = await this.pool.execute<RowDataPacket[]>(
+        `SELECT test_case_id FROM test_cases
+         WHERE project_id = :projectId AND stable_case_code = :stableCaseCode AND test_case_id <> :testCaseId
+         LIMIT 1`,
+        { projectId, stableCaseCode, testCaseId },
+      );
+      if (sameCodeRows[0]) throw new ConflictException(`Stable Case Code ${stableCaseCode} is already used in this project.`);
+    }
 
     const connection = await this.pool.getConnection();
     try {
@@ -287,7 +297,8 @@ export class TestCaseRepository {
 
       await connection.execute(
         `UPDATE test_cases
-         SET current_test_case_version_id = :testCaseVersionId,
+         SET stable_case_code = COALESCE(:stableCaseCode, stable_case_code),
+             current_test_case_version_id = :testCaseVersionId,
              current_status_code = :draftStatusCode,
              updated_by_user_id = :updatedByUserId,
              updated_at = CURRENT_TIMESTAMP
@@ -295,6 +306,7 @@ export class TestCaseRepository {
            AND test_case_id = :testCaseId`,
         {
           testCaseVersionId: insertResult.insertId,
+          stableCaseCode: stableCaseCode ?? null,
           draftStatusCode: this.statusLabelToCode(TestCaseStatus.Draft),
           updatedByUserId: userId,
           projectId,
